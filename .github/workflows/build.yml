@@ -1,0 +1,29 @@
+name: Build Portable EXE
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Baixar Código
+      uses: actions/checkout@v4
+
+    - name: Instalar .NET 8
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 8.0.x
+
+    - name: Compilar Executável Único (Self-Contained)
+      run: |
+        dotnet publish PosFormatador.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o output/
+
+    - name: Publicar Executável para Download
+      uses: actions/upload-artifact@v4
+      with:
+        name: PosFormatador-Executavel
+        path: output/PosFormatador.exe
