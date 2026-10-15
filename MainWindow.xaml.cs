@@ -16,7 +16,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        Log("Aplicativo pronto. Clique em 'Escanear Hardware'.");
+        Log("Aplicativo inicializado. Clique em 'Escanear Hardware'.");
     }
 
     private void Log(string message)
@@ -25,11 +25,11 @@ public partial class MainWindow : Window
         TxtLog.ScrollToEnd();
     }
 
-    // 1. ESCANEAR HARDWARE
+    // 1. ESCANEAR HARDWARE (WMI)
     private async void BtnScanHardware_Click(object sender, RoutedEventArgs e)
     {
         BtnScanHardware.IsEnabled = false;
-        Log("Iniciando varredura de hardware...");
+        Log("Iniciando varredura WMI de dispositivos Plug and Play...");
 
         _allDevices = await Task.Run(GetHardwareDevices);
         ApplyFilter();
@@ -96,7 +96,7 @@ public partial class MainWindow : Window
         if (confirm != MessageBoxResult.Yes) return;
 
         BtnAutoDrivers.IsEnabled = false;
-        Log("Iniciando busca automática de drivers...");
+        Log("Iniciando busca automática de drivers via Windows Update Catalog...");
 
         string tempScript = Path.Combine(Path.GetTempPath(), "atualizar_drivers.bat");
 
@@ -110,190 +110,11 @@ echo.
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     ""$Session = New-Object -ComObject Microsoft.Update.Session;"" ^
-    ""$Searcher = $Session.CreateUpdateSearcher();"" ^
+    ""$Searcher =$Session.CreateUpdateSearcher();"" ^
     ""$Searcher.ServerSelection = 2;"" ^
-    ""Write-Host 'Buscando drivers pendentes...' -ForegroundColor Yellow;"" ^
-    ""$Results = $Searcher.Search('Type=''Driver'' and IsInstalled=0');"" ^
+    ""Write-Host 'Buscando drivers compativeis pendentes...' -ForegroundColor Yellow;"" ^
+    ""$Results =$Searcher.Search('Type=''Driver'' and IsInstalled=0');"" ^
     ""if ($Results.Updates.Count -eq 0) {"" ^
-    ""   Write-Host 'Nenhum driver pendente foi encontrado!' -ForegroundColor Green;"" ^
+    ""   Write-Host 'Nenhum driver pendente foi encontrado. Todos estao atualizados!' -ForegroundColor Green;"" ^
     ""} else {"" ^
-    ""   Write-Host ('Encontrado(s) ' + $Results.Updates.Count + ' driver(s). Baixando...') -ForegroundColor Cyan;"" ^
-    ""   $UpdatesToDownload = New-Object -ComObject Microsoft.Update.UpdateColl;"" ^
-    ""   foreach ($u in $Results.Updates) { $UpdatesToDownload.Add($u) | Out-Null; Write-Host (' - ' + $u.Title); }"" ^
-    ""   $Downloader = $Session.CreateUpdateDownloader();"" ^
-    ""   $Downloader.Updates = $UpdatesToDownload;"" ^
-    ""   $Downloader.Download();"" ^
-    ""   Write-Host 'Instalando drivers...' -ForegroundColor Yellow;"" ^
-    ""   $Installer = $Session.CreateUpdateInstaller();"" ^
-    ""   $Installer.Updates = $UpdatesToDownload;"" ^
-    ""   $Installer.Install();"" ^
-    ""   Write-Host 'Drivers instalados com sucesso!' -ForegroundColor Green;"" ^
-    ""}""
-
-echo.
-echo Concluido! Pressione qualquer tecla para fechar.
-pause >nul
-";
-
-        try
-        {
-            await File.WriteAllTextAsync(tempScript, scriptContent);
-            await RunVisibleProcessAsync(tempScript);
-            Log("Processo de atualização de drivers concluído. Clique em 'Escanear Hardware' para conferir.");
-        }
-        catch (Exception ex)
-        {
-            Log($"Erro ao atualizar drivers: {ex.Message}");
-        }
-        finally
-        {
-            if (File.Exists(tempScript)) try { File.Delete(tempScript); } catch { }
-            BtnAutoDrivers.IsEnabled = true;
-        }
-    }
-
-    // 3. INSTALAÇÃO MANUAL DE DRIVER LOCAL (.INF)
-    private async void BtnInstallInf_Click(object sender, RoutedEventArgs e)
-    {
-        var dialog = new Microsoft.Win32.OpenFileDialog
-        {
-            Filter = "Arquivos de Driver (*.inf)|*.inf",
-            Title = "Selecione o arquivo .INF do Driver"
-        };
-
-        if (dialog.ShowDialog() == true)
-        {
-            Log($"Instalando driver: {dialog.FileName}");
-            await RunVisibleProcessAsync("pnputil.exe", $"/add-driver \"{dialog.FileName}\" /install");
-            Log("Comando pnputil concluído.");
-        }
-    }
-
-    // 4. INSTALAÇÃO DE PROGRAMAS + OFFICE 2021
-    private async void BtnRunWinget_Click(object sender, RoutedEventArgs e)
-    {
-        var confirm = MessageBox.Show(
-            "Deseja instalar os programas essenciais e o Office 2021?\n\nUma janela do Prompt será aberta para você acompanhar o progresso em tempo real.",
-            "Confirmar Instalação", MessageBoxButton.YesNo, MessageBoxImage.Question);
-
-        if (confirm != MessageBoxResult.Yes) return;
-
-        BtnRunWinget.IsEnabled = false;
-        Log("Abrindo instalador de programas em janela de console...");
-
-        string tempBat = Path.Combine(Path.GetTempPath(), "instalar_tudo.bat");
-
-        string scriptContent = @"@echo off
-title Instalacao de Programas e Office 2021
-color 0A
-
-:: Tenta localizar o executavel exato do winget caso nao esteja no PATH padrao
-set ""WINGET_CMD=winget""
-where winget >nul 2>&1
-if %errorLevel% neq 0 (
-    for /d %%i in (""%LOCALAPPDATA%\Microsoft\WindowsApps\Microsoft.DesktopAppInstaller_*"") do (
-        if exist ""%%i\winget.exe"" set ""WINGET_CMD=%%i\winget.exe""
-    )
-)
-
-echo ======================================================
-echo           INSTALANDO PROGRAMAS ESSENCIAIS
-echo ======================================================
-echo.
-
-set W_ARGS=--silent --accept-source-agreements --accept-package-agreements
-
-echo [1/7] Google Chrome...
-%WINGET_CMD% install --id Google.Chrome %W_ARGS%
-
-echo [2/7] 7-Zip...
-%WINGET_CMD% install --id 7zip.7zip %W_ARGS%
-
-echo [3/7] WinRAR...
-%WINGET_CMD% install --id RARLab.WinRAR %W_ARGS%
-
-echo [4/7] Adobe Acrobat Reader...
-%WINGET_CMD% install --id Adobe.Acrobat.Reader.64-bit %W_ARGS%
-
-echo [5/7] Java Runtime (JRE 8)...
-%WINGET_CMD% install --id Oracle.JavaRuntimeEnvironment %W_ARGS%
-
-echo [6/7] Visual C++ Runtimes All-in-One...
-%WINGET_CMD% install --id abbodi1406.vcredist %W_ARGS%
-
-echo [7/7] DirectX...
-%WINGET_CMD% install --id Microsoft.DirectX %W_ARGS%
-
-echo.
-echo ======================================================
-echo           INSTALANDO MICROSOFT OFFICE 2021
-echo ======================================================
-echo.
-set ""TEMP_OFFICE=%TEMP%\Office2021_Setup""
-if not exist ""%TEMP_OFFICE%"" mkdir ""%TEMP_OFFICE%""
-cd /d ""%TEMP_OFFICE%""
-
-(
-echo ^<Configuration^>
-echo   ^<Add OfficeClientEdition=""64"" Channel=""PerpetualVL2021""^>
-echo     ^<Product ID=""ProPlus2021Volume""^>
-echo       ^<Language ID=""pt-br"" /^>
-echo     ^</Product^>
-echo   ^</Add^>
-echo   ^<Display Level=""None"" AcceptEULA=""TRUE"" /^>
-echo ^</Configuration^>
-) > configuration.xml
-
-echo Baixando instalador oficial do Office...
-powershell -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://download.microsoft.com/download/2/7/A/27AF1E07-7E7F-4BEE-A625-27B5E28456F4/officedeploymenttool_16.0.17628.20144.exe' -OutFile 'odt.exe'""
-odt.exe /quiet /extract:""%TEMP_OFFICE%""
-
-echo Instalando o Office 2021 silenciosamente (aguarde finalizar)...
-setup.exe /configure configuration.xml
-
-cd /d ""%TEMP%""
-rmdir /s /q ""%TEMP_OFFICE%""
-
-echo.
-echo ======================================================
-echo          TODOS OS PROGRAMAS FORAM INSTALADOS!
-echo ======================================================
-echo Pressione qualquer tecla para fechar...
-pause >nul
-";
-
-        try
-        {
-            await File.WriteAllTextAsync(tempBat, scriptContent);
-            await RunVisibleProcessAsync(tempBat);
-            Log("Instalação de programas e Office concluída!");
-        }
-        catch (Exception ex)
-        {
-            Log($"Erro na instalação: {ex.Message}");
-        }
-        finally
-        {
-            if (File.Exists(tempBat)) try { File.Delete(tempBat); } catch { }
-            BtnRunWinget.IsEnabled = true;
-        }
-    }
-
-    // Executa em uma janela de console VISÍVEL para o usuário ver o download real e evitar travamentos
-    private Task RunVisibleProcessAsync(string filePath, string args = "")
-    {
-        return Task.Run(() =>
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = filePath,
-                Arguments = args,
-                UseShellExecute = true, // Permite abrir janela própria e rodar com permissões
-                Verb = "runas"
-            };
-
-            using var proc = Process.Start(psi);
-            proc?.WaitForExit();
-        });
-    }
-}
+    ""   Write-Host ('Foram encontrados ' + $Results.Updates.Count + ' driver(s) para atualizar
