@@ -86,7 +86,7 @@ public partial class MainWindow : Window
             : _allDevices.ToList();
     }
 
-    // 2. BUSCA E INSTALAÇÃO AUTOMÁTICA DE DRIVERS (POWERSHELL DIRETO)
+    // 2. BUSCA E INSTALAÇÃO AUTOMÁTICA DE DRIVERS (POWERSHELL)
     private async void BtnAutoDrivers_Click(object sender, RoutedEventArgs e)
     {
         var confirm = MessageBox.Show(
@@ -124,14 +124,10 @@ if ($Results.Updates.Count -eq 0) {
     }
     
     Write-Host '`nBaixando drivers...' -ForegroundColor Yellow
-    $Downloader = $Session.CreateUpdateDownloader()
-    $Downloader.Updates = $UpdatesToDownload
-    $Downloader.Download()
+    $Downloader = $Session.CreateUpdateDownloader()$Downloader.Updates = $UpdatesToDownload$Downloader.Download()
     
     Write-Host 'Instalando drivers...' -ForegroundColor Yellow
-    $Installer = $Session.CreateUpdateInstaller()
-    $Installer.Updates = $UpdatesToDownload
-    $Installer.Install()
+    $Installer = $Session.CreateUpdateInstaller()$Installer.Updates = $UpdatesToDownload$Installer.Install()
     
     Write-Host 'Drivers instalados com sucesso!' -ForegroundColor Green
 }
@@ -177,118 +173,142 @@ Read-Host 'Pressione ENTER para fechar esta janela...'
         }
     }
 
-    // 4. INSTALAÇÃO COMPLETA DE PROGRAMAS + OFFICE 2021
+    // 4. INSTALAÇÃO COMPLETA DE PROGRAMAS (AUTO-INSTALA O WINGET SE NÃO EXISTIR)
     private async void BtnRunWinget_Click(object sender, RoutedEventArgs e)
     {
         var confirm = MessageBox.Show(
-            "Deseja iniciar a instalação dos programas e do Office 2021?\n\nUma janela do Prompt será exibida com o progresso de cada item.",
+            "Deseja iniciar a instalação dos programas e do Office 2021?\n\nO instalador verificará e configurará o Winget automaticamente caso o Windows seja novo.",
             "Confirmar Instalação", MessageBoxButton.YesNo, MessageBoxImage.Question);
 
         if (confirm != MessageBoxResult.Yes) return;
 
         BtnRunWinget.IsEnabled = false;
-        Log("Abrindo instalador de programas em janela de console...");
+        Log("Iniciando processo de instalação dos programas...");
 
-        string tempBat = Path.Combine(Path.GetTempPath(), "instalar_programas_office.bat");
+        string tempPs1 = Path.Combine(Path.GetTempPath(), "instalar_programas.ps1");
 
-        string scriptContent = @"@echo off
-title Instalacao de Programas e Office 2021
-color 0A
+        string psScript = @"$host.UI.RawUI.WindowTitle = 'Instalacao de Programas e Office 2021'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-set ""WINGET_CMD=winget""
-where winget >nul 2>&1
-if %errorLevel% neq 0 (
-    for /d %%i in (""%LOCALAPPDATA%\Microsoft\WindowsApps\Microsoft.DesktopAppInstaller_*"") do (
-        if exist ""%%i\winget.exe"" set ""WINGET_CMD=%%i\winget.exe""
-    )
+Write-Host '======================================================' -ForegroundColor Cyan
+Write-Host '       VERIFICANDO DEPENDENCIAS DO SISTEMA            ' -ForegroundColor Cyan
+Write-Host '======================================================' -ForegroundColor Cyan
+Write-Host ''
+
+# 1. Verifica se o Winget existe; se nao existir, baixa e instala
+$wingetCmd = Get-Command winget -ErrorAction SilentlyContinue
+
+if (-not $wingetCmd) {
+    Write-Host '[!] Winget nao encontrado. Instalando o Windows Package Manager automaticamente...' -ForegroundColor Yellow
+    $tempDir = Join-Path$env:TEMP 'winget_install'
+    New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+    
+    try {
+        Write-Host 'Baixando dependencias (VCLibs e UI.Xaml)...' -ForegroundColor Gray
+        Invoke-WebRequest -Uri 'https://aka.ms/Microsoft.VCLibs.x64.14.00.Desktop.appx' -OutFile ""$tempDir\vclibs.appx"" -UseBasicParsing
+        Invoke-WebRequest -Uri 'https://github.com/microsoft/microsoft-ui-xaml/releases/download/v2.8.6/Microsoft.UI.Xaml.2.8.x64.appx' -OutFile ""$tempDir\uixaml.appx"" -UseBasicParsing
+        
+        Write-Host 'Baixando Winget oficial...' -ForegroundColor Gray
+        Invoke-WebRequest -Uri 'https://github.com/microsoft/winget-cli/releases/latest/download/Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle' -OutFile ""$tempDir\winget.msixbundle"" -UseBasicParsing
+        
+        Write-Host 'Registrando pacotes no Windows...' -ForegroundColor Yellow
+        Add-AppxPackage -Path ""$tempDir\vclibs.appx"" -ErrorAction SilentlyContinue
+        Add-AppxPackage -Path ""$tempDir\uixaml.appx"" -ErrorAction SilentlyContinue
+        Add-AppxPackage -Path ""$tempDir\winget.msixbundle""
+        
+        # Atualiza o PATH da sessao atual
+        $env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User')
+        Write-Host '[OK] Winget configurado com sucesso!' -ForegroundColor Green
+    }
+    catch {
+        Write-Host ('[AVISO] Falha ao instalar pacote msixbundle: ' + $_.Exception.Message) -ForegroundColor Red
+    }
+} else {
+    Write-Host '[OK] Winget ja esta instalado no sistema.' -ForegroundColor Green
+}
+
+Write-Host ''
+Write-Host '======================================================' -ForegroundColor Cyan
+Write-Host '           INSTALANDO PROGRAMAS ESSENCIAIS            ' -ForegroundColor Cyan
+Write-Host '======================================================' -ForegroundColor Cyan
+Write-Host ''
+
+$apps = @(
+    @{ Name = 'Google Chrome'; Id = 'Google.Chrome' },
+    @{ Name = '7-Zip'; Id = '7zip.7zip' },
+    @{ Name = 'WinRAR'; Id = 'RARLab.WinRAR' },
+    @{ Name = 'Adobe Acrobat Reader'; Id = 'Adobe.Acrobat.Reader.64-bit' },
+    @{ Name = 'Java JRE 8'; Id = 'Oracle.JavaRuntimeEnvironment' },
+    @{ Name = 'Visual C++ All-in-One'; Id = 'abbodi1406.vcredist' },
+    @{ Name = 'DirectX'; Id = 'Microsoft.DirectX' }
 )
 
-echo ======================================================
-echo           INSTALANDO PROGRAMAS ESSENCIAIS
-echo ======================================================
-echo.
+$wArgs = '--silent --accept-source-agreements --accept-package-agreements'
 
-set W_ARGS=--silent --accept-source-agreements --accept-package-agreements
+foreach ($app in$apps) {
+    Write-Host ('Instalando ' + $app.Name + '...') -ForegroundColor Yellow
+    winget install --id $app.Id --silent --accept-source-agreements --accept-package-agreements
+}
 
-echo [1/7] Google Chrome...
-%WINGET_CMD% install --id Google.Chrome %W_ARGS%
+Write-Host ''
+Write-Host '======================================================' -ForegroundColor Cyan
+Write-Host '           INSTALANDO MICROSOFT OFFICE 2021           ' -ForegroundColor Cyan
+Write-Host '======================================================' -ForegroundColor Cyan
+Write-Host ''
 
-echo [2/7] 7-Zip...
-%WINGET_CMD% install --id 7zip.7zip %W_ARGS%
+$tempOffice = Join-Path$env:TEMP 'Office2021_Setup'
+New-Item -ItemType Directory -Path $tempOffice -Force | Out-Null
+Set-Location $tempOffice
 
-echo [3/7] WinRAR...
-%WINGET_CMD% install --id RARLab.WinRAR %W_ARGS%
+$xmlConfig = @'
+<Configuration>
+  <Add OfficeClientEdition=""64"" Channel=""PerpetualVL2021"">
+    <Product ID=""ProPlus2021Volume"">
+      <Language ID=""pt-br"" />
+    </Product>
+  </Add>
+  <Display Level=""None"" AcceptEULA=""TRUE"" />
+</Configuration>
+'@
 
-echo [4/7] Adobe Acrobat Reader...
-%WINGET_CMD% install --id Adobe.Acrobat.Reader.64-bit %W_ARGS%
+Set-Content -Path ""$tempOffice\configuration.xml"" -Value $xmlConfig
 
-echo [5/7] Java Runtime (JRE 8)...
-%WINGET_CMD% install --id Oracle.JavaRuntimeEnvironment %W_ARGS%
+Write-Host 'Baixando ferramenta ODT da Microsoft...' -ForegroundColor Yellow
+$wc = New-Object System.Net.WebClient
+$wc.Headers.Add('User-Agent', 'Mozilla/5.0')
 
-echo [6/7] Visual C++ Runtimes All-in-One...
-%WINGET_CMD% install --id abbodi1406.vcredist %W_ARGS%
+try {
+    $wc.DownloadFile('https://download.microsoft.com/download/2/7/A/27AF1BE6-DD20-4CB4-B154-EBAB8A7D4A7E/officedeploymenttool_17830-20162.exe', ""$tempOffice\odt.exe"")
+} catch {
+    $wc.DownloadFile('https://download.microsoft.com/download/2/7/A/27AF1E07-7E7F-4BEE-A625-27B5E28456F4/officedeploymenttool_16.0.17628.20144.exe', ""$tempOffice\odt.exe"")
+}
 
-echo [7/7] DirectX...
-%WINGET_CMD% install --id Microsoft.DirectX %W_ARGS%
+if (Test-Path ""$tempOffice\odt.exe"") {
+    Write-Host 'Extraindo ferramentas...' -ForegroundColor Gray
+    Start-Process -FilePath ""$tempOffice\odt.exe"" -ArgumentList ""/quiet /extract:`""$tempOffice`"""" -Wait
+    
+    Write-Host 'Instalando Office 2021 em segundo plano (aguarde)...' -ForegroundColor Yellow
+    Start-Process -FilePath ""$tempOffice\setup.exe"" -ArgumentList ""/configure configuration.xml"" -Wait
+    Write-Host '[OK] Office 2021 instalado!' -ForegroundColor Green
+} else {
+    Write-Host 'Tentando instalar Office via Winget...' -ForegroundColor Yellow
+    winget install --id Microsoft.Office --silent --accept-source-agreements --accept-package-agreements
+}
 
-echo.
-echo ======================================================
-echo           INSTALANDO MICROSOFT OFFICE 2021
-echo ======================================================
-echo.
+Remove-Item -Path $tempOffice -Recurse -Force -ErrorAction SilentlyContinue
 
-set ""TEMP_OFFICE=%TEMP%\Office2021_Setup""
-if not exist ""%TEMP_OFFICE%"" mkdir ""%TEMP_OFFICE%""
-cd /d ""%TEMP_OFFICE%""
-
-(
-echo ^<Configuration^>
-echo   ^<Add OfficeClientEdition=""64"" Channel=""PerpetualVL2021""^>
-echo     ^<Product ID=""ProPlus2021Volume""^>
-echo       ^<Language ID=""pt-br"" /^>
-echo     ^</Product^>
-echo   ^</Add^>
-echo   ^<Display Level=""None"" AcceptEULA=""TRUE"" /^>
-echo ^</Configuration^>
-) > configuration.xml
-
-echo Baixando ferramenta de instalacao da Microsoft (ODT)...
-powershell -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $wc = New-Object System.Net.WebClient; $wc.Headers.Add('User-Agent', 'Mozilla/5.0'); $wc.DownloadFile('https://download.microsoft.com/download/2/7/A/27AF1BE6-DD20-4CB4-B154-EBAB8A7D4A7E/officedeploymenttool_17830-20162.exe', 'odt.exe')""
-
-if not exist ""odt.exe"" (
-    echo Link 1 falhou. Tentando link alternativo...
-    powershell -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $wc = New-Object System.Net.WebClient; $wc.Headers.Add('User-Agent', 'Mozilla/5.0'); $wc.DownloadFile('https://download.microsoft.com/download/2/7/A/27AF1E07-7E7F-4BEE-A625-27B5E28456F4/officedeploymenttool_16.0.17628.20144.exe', 'odt.exe')""
-)
-
-if not exist ""odt.exe"" (
-    echo [AVISO] Nao foi possivel baixar o ODT pelos links diretos. Tentando via Winget...
-    %WINGET_CMD% install --id Microsoft.Office %W_ARGS%
-    goto office_fim
-)
-
-echo Extraindo ferramentas do Office...
-odt.exe /quiet /extract:""%TEMP_OFFICE%""
-
-echo Baixando e instalando componentes do Office 2021 (Aguarde alguns minutos)...
-setup.exe /configure configuration.xml
-
-:office_fim
-cd /d ""%TEMP%""
-rmdir /s /q ""%TEMP_OFFICE%""
-
-echo.
-echo ======================================================
-echo          TODOS OS PROGRAMAS FORAM INSTALADOS!
-echo ======================================================
-echo Pressione qualquer tecla para fechar esta janela...
-pause >nul
+Write-Host ''
+Write-Host '======================================================' -ForegroundColor Cyan
+Write-Host '          TODOS OS PROGRAMAS FORAM INSTALADOS!        ' -ForegroundColor Green
+Write-Host '======================================================' -ForegroundColor Cyan
+Read-Host 'Pressione ENTER para fechar...'
 ";
 
         try
         {
-            await File.WriteAllTextAsync(tempBat, scriptContent);
-            await RunVisibleProcessAsync(tempBat);
-            Log("Instalação de programas e Office concluída!");
+            await File.WriteAllTextAsync(tempPs1, psScript);
+            await RunVisibleProcessAsync("powershell.exe", $"-NoProfile -ExecutionPolicy Bypass -File \"{tempPs1}\"");
+            Log("Processo de instalação finalizado!");
         }
         catch (Exception ex)
         {
@@ -296,7 +316,7 @@ pause >nul
         }
         finally
         {
-            if (File.Exists(tempBat)) try { File.Delete(tempBat); } catch { }
+            if (File.Exists(tempPs1)) try { File.Delete(tempPs1); } catch { }
             BtnRunWinget.IsEnabled = true;
         }
     }
