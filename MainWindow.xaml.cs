@@ -86,11 +86,11 @@ public partial class MainWindow : Window
             : _allDevices.ToList();
     }
 
-    // 2. BUSCA E INSTALAÇÃO AUTOMÁTICA DE DRIVERS PELA INTERNET
+    // 2. BUSCA E INSTALAÇÃO AUTOMÁTICA DE DRIVERS (POWERSHELL DIRETO)
     private async void BtnAutoDrivers_Click(object sender, RoutedEventArgs e)
     {
         var confirm = MessageBox.Show(
-            "Deseja buscar, baixar e instalar os drivers ausentes via catálogo oficial do Windows?\n\nUma janela do Prompt será exibida com o progresso.",
+            "Deseja buscar, baixar e instalar os drivers ausentes pelo catálogo oficial do Windows?\n\nUma janela do PowerShell será aberta com o progresso.",
             "Download de Drivers", MessageBoxButton.YesNo, MessageBoxImage.Question);
 
         if (confirm != MessageBoxResult.Yes) return;
@@ -98,23 +98,52 @@ public partial class MainWindow : Window
         BtnAutoDrivers.IsEnabled = false;
         Log("Iniciando busca automática de drivers via Windows Update Catalog...");
 
-        string tempScript = Path.Combine(Path.GetTempPath(), "atualizar_drivers.bat");
+        string tempPs1 = Path.Combine(Path.GetTempPath(), "atualizar_drivers.ps1");
 
-        string scriptContent = @"@echo off
-title Atualizacao Automatica de Drivers
-color 0B
-echo ======================================================
-echo       ANALISANDO E BAIXANDO DRIVERS DO SISTEMA
-echo ======================================================
-echo.
+        string psContent = @"$host.UI.RawUI.WindowTitle = 'Atualizacao Automatica de Drivers'
+Write-Host '======================================================' -ForegroundColor Cyan
+Write-Host '       ANALISANDO E BAIXANDO DRIVERS DO SISTEMA       ' -ForegroundColor Cyan
+Write-Host '======================================================' -ForegroundColor Cyan
+Write-Host ''
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    ""$Session = New-Object -ComObject Microsoft.Update.Session;"" ^
-    ""$Searcher =$Session.CreateUpdateSearcher();"" ^
-    ""$Searcher.ServerSelection = 2;"" ^
-    ""Write-Host 'Buscando drivers compativeis pendentes...' -ForegroundColor Yellow;"" ^
-    ""$Results =$Searcher.Search('Type=''Driver'' and IsInstalled=0');"" ^
-    ""if ($Results.Updates.Count -eq 0) {"" ^
-    ""   Write-Host 'Nenhum driver pendente foi encontrado. Todos estao atualizados!' -ForegroundColor Green;"" ^
-    ""} else {"" ^
-    ""   Write-Host ('Foram encontrados ' + $Results.Updates.Count + ' driver(s) para atualizar
+$Session = New-Object -ComObject Microsoft.Update.Session
+$Searcher = $Session.CreateUpdateSearcher()
+$Searcher.ServerSelection = 2
+
+Write-Host 'Buscando drivers compativeis pendentes...' -ForegroundColor Yellow
+$Results = $Searcher.Search(""Type='Driver' and IsInstalled=0"")
+
+if ($Results.Updates.Count -eq 0) {
+    Write-Host 'Nenhum driver pendente foi encontrado. Todos estao atualizados!' -ForegroundColor Green
+} else {
+    Write-Host ('Foram encontrados ' + $Results.Updates.Count + ' driver(s) para atualizar:') -ForegroundColor Cyan
+    $UpdatesToDownload = New-Object -ComObject Microsoft.Update.UpdateColl
+    foreach ($u in $Results.Updates) {
+        $UpdatesToDownload.Add($u) | Out-Null
+        Write-Host (' - ' + $u.Title)
+    }
+    
+    Write-Host '`nBaixando drivers...' -ForegroundColor Yellow
+    $Downloader = $Session.CreateUpdateDownloader()$Downloader.Updates = $UpdatesToDownload$Downloader.Download()
+    
+    Write-Host 'Instalando drivers...' -ForegroundColor Yellow
+    $Installer = $Session.CreateUpdateInstaller()$Installer.Updates = $UpdatesToDownload$Installer.Install()
+    
+    Write-Host 'Drivers instalados com sucesso!' -ForegroundColor Green
+}
+
+Write-Host ''
+Write-Host '======================================================' -ForegroundColor Cyan
+Write-Host '                 PROCESSO CONCLUIDO!                  ' -ForegroundColor Cyan
+Write-Host '======================================================' -ForegroundColor Cyan
+Read-Host 'Pressione ENTER para fechar esta janela...'
+";
+
+        try
+        {
+            await File.WriteAllTextAsync(tempPs1, psContent);
+            await RunVisibleProcessAsync("powershell.exe", $"-NoProfile -ExecutionPolicy Bypass -File \"{tempPs1}\"");
+            Log("Processo de atualização de drivers concluído. Reescaneie o hardware para conferir.");
+        }
+        catch (Exception ex)
+        {
