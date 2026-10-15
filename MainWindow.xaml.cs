@@ -124,10 +124,14 @@ if ($Results.Updates.Count -eq 0) {
     }
     
     Write-Host '`nBaixando drivers...' -ForegroundColor Yellow
-    $Downloader = $Session.CreateUpdateDownloader()$Downloader.Updates = $UpdatesToDownload$Downloader.Download()
+    $Downloader = $Session.CreateUpdateDownloader()
+    $Downloader.Updates = $UpdatesToDownload
+    $Downloader.Download()
     
     Write-Host 'Instalando drivers...' -ForegroundColor Yellow
-    $Installer = $Session.CreateUpdateInstaller()$Installer.Updates = $UpdatesToDownload$Installer.Install()
+    $Installer = $Session.CreateUpdateInstaller()
+    $Installer.Updates = $UpdatesToDownload
+    $Installer.Install()
     
     Write-Host 'Drivers instalados com sucesso!' -ForegroundColor Green
 }
@@ -147,3 +151,170 @@ Read-Host 'Pressione ENTER para fechar esta janela...'
         }
         catch (Exception ex)
         {
+            Log($"Erro ao atualizar drivers: {ex.Message}");
+        }
+        finally
+        {
+            if (File.Exists(tempPs1)) try { File.Delete(tempPs1); } catch { }
+            BtnAutoDrivers.IsEnabled = true;
+        }
+    }
+
+    // 3. INSTALAÇÃO MANUAL DE DRIVER LOCAL (.INF)
+    private async void BtnInstallInf_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Filter = "Arquivos de Driver (*.inf)|*.inf",
+            Title = "Selecione o arquivo .INF do Driver"
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            Log($"Instalando driver local: {dialog.FileName}");
+            await RunVisibleProcessAsync("pnputil.exe", $"/add-driver \"{dialog.FileName}\" /install");
+            Log("Comando pnputil concluído.");
+        }
+    }
+
+    // 4. INSTALAÇÃO COMPLETA DE PROGRAMAS + OFFICE 2021
+    private async void BtnRunWinget_Click(object sender, RoutedEventArgs e)
+    {
+        var confirm = MessageBox.Show(
+            "Deseja iniciar a instalação dos programas e do Office 2021?\n\nUma janela do Prompt será exibida com o progresso de cada item.",
+            "Confirmar Instalação", MessageBoxButton.YesNo, MessageBoxImage.Question);
+
+        if (confirm != MessageBoxResult.Yes) return;
+
+        BtnRunWinget.IsEnabled = false;
+        Log("Abrindo instalador de programas em janela de console...");
+
+        string tempBat = Path.Combine(Path.GetTempPath(), "instalar_programas_office.bat");
+
+        string scriptContent = @"@echo off
+title Instalacao de Programas e Office 2021
+color 0A
+
+set ""WINGET_CMD=winget""
+where winget >nul 2>&1
+if %errorLevel% neq 0 (
+    for /d %%i in (""%LOCALAPPDATA%\Microsoft\WindowsApps\Microsoft.DesktopAppInstaller_*"") do (
+        if exist ""%%i\winget.exe"" set ""WINGET_CMD=%%i\winget.exe""
+    )
+)
+
+echo ======================================================
+echo           INSTALANDO PROGRAMAS ESSENCIAIS
+echo ======================================================
+echo.
+
+set W_ARGS=--silent --accept-source-agreements --accept-package-agreements
+
+echo [1/7] Google Chrome...
+%WINGET_CMD% install --id Google.Chrome %W_ARGS%
+
+echo [2/7] 7-Zip...
+%WINGET_CMD% install --id 7zip.7zip %W_ARGS%
+
+echo [3/7] WinRAR...
+%WINGET_CMD% install --id RARLab.WinRAR %W_ARGS%
+
+echo [4/7] Adobe Acrobat Reader...
+%WINGET_CMD% install --id Adobe.Acrobat.Reader.64-bit %W_ARGS%
+
+echo [5/7] Java Runtime (JRE 8)...
+%WINGET_CMD% install --id Oracle.JavaRuntimeEnvironment %W_ARGS%
+
+echo [6/7] Visual C++ Runtimes All-in-One...
+%WINGET_CMD% install --id abbodi1406.vcredist %W_ARGS%
+
+echo [7/7] DirectX...
+%WINGET_CMD% install --id Microsoft.DirectX %W_ARGS%
+
+echo.
+echo ======================================================
+echo           INSTALANDO MICROSOFT OFFICE 2021
+echo ======================================================
+echo.
+
+set ""TEMP_OFFICE=%TEMP%\Office2021_Setup""
+if not exist ""%TEMP_OFFICE%"" mkdir ""%TEMP_OFFICE%""
+cd /d ""%TEMP_OFFICE%""
+
+(
+echo ^<Configuration^>
+echo   ^<Add OfficeClientEdition=""64"" Channel=""PerpetualVL2021""^>
+echo     ^<Product ID=""ProPlus2021Volume""^>
+echo       ^<Language ID=""pt-br"" /^>
+echo     ^</Product^>
+echo   ^</Add^>
+echo   ^<Display Level=""None"" AcceptEULA=""TRUE"" /^>
+echo ^</Configuration^>
+) > configuration.xml
+
+echo Baixando ferramenta de instalacao da Microsoft (ODT)...
+powershell -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $wc = New-Object System.Net.WebClient; $wc.Headers.Add('User-Agent', 'Mozilla/5.0'); $wc.DownloadFile('https://download.microsoft.com/download/2/7/A/27AF1BE6-DD20-4CB4-B154-EBAB8A7D4A7E/officedeploymenttool_17830-20162.exe', 'odt.exe')""
+
+if not exist ""odt.exe"" (
+    echo Link 1 falhou. Tentando link alternativo...
+    powershell -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $wc = New-Object System.Net.WebClient; $wc.Headers.Add('User-Agent', 'Mozilla/5.0'); $wc.DownloadFile('https://download.microsoft.com/download/2/7/A/27AF1E07-7E7F-4BEE-A625-27B5E28456F4/officedeploymenttool_16.0.17628.20144.exe', 'odt.exe')""
+)
+
+if not exist ""odt.exe"" (
+    echo [AVISO] Nao foi possivel baixar o ODT pelos links diretos. Tentando via Winget...
+    %WINGET_CMD% install --id Microsoft.Office %W_ARGS%
+    goto office_fim
+)
+
+echo Extraindo ferramentas do Office...
+odt.exe /quiet /extract:""%TEMP_OFFICE%""
+
+echo Baixando e instalando componentes do Office 2021 (Aguarde alguns minutos)...
+setup.exe /configure configuration.xml
+
+:office_fim
+cd /d ""%TEMP%""
+rmdir /s /q ""%TEMP_OFFICE%""
+
+echo.
+echo ======================================================
+echo          TODOS OS PROGRAMAS FORAM INSTALADOS!
+echo ======================================================
+echo Pressione qualquer tecla para fechar esta janela...
+pause >nul
+";
+
+        try
+        {
+            await File.WriteAllTextAsync(tempBat, scriptContent);
+            await RunVisibleProcessAsync(tempBat);
+            Log("Instalação de programas e Office concluída!");
+        }
+        catch (Exception ex)
+        {
+            Log($"Erro na instalação: {ex.Message}");
+        }
+        finally
+        {
+            if (File.Exists(tempBat)) try { File.Delete(tempBat); } catch { }
+            BtnRunWinget.IsEnabled = true;
+        }
+    }
+
+    private Task RunVisibleProcessAsync(string filePath, string args = "")
+    {
+        return Task.Run(() =>
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = filePath,
+                Arguments = args,
+                UseShellExecute = true,
+                Verb = "runas"
+            };
+
+            using var proc = Process.Start(psi);
+            proc?.WaitForExit();
+        });
+    }
+}
